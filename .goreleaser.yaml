@@ -1,0 +1,89 @@
+version: 2
+
+project_name: ani
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: ani
+    main: ./cmd/ani
+    binary: ani
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - name: ani
+    repository:
+      owner: WhymeUMR
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/WhymeUMR/ani
+    description: "ani CLI with TUI"
+    license: MIT
+    install: |
+      bin.install "ani"
+    test: |
+      system "#{bin}/ani", "--version"
+
+scoops:
+  - name: ani
+    repository:
+      owner: WhymeUMR
+      name: scoop-bucket
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/WhymeUMR/ani
+    description: "ani CLI with TUI"
+    license: MIT
+
+nfpms:
+  - id: ani
+    package_name: ani
+    vendor: WhymeUMR
+    homepage: https://github.com/WhymeUMR/ani
+    maintainer: WhymeUMR <whymeumr@users.noreply.github.com>
+    description: "ani CLI with TUI"
+    license: MIT
+    formats: [deb, rpm, apk]
+
+aurs:
+  - name: ani-bin
+    homepage: https://github.com/WhymeUMR/ani
+    description: "ani CLI with TUI"
+    maintainers:
+      - "WhymeUMR <whymeumr@users.noreply.github.com>"
+    license: MIT
+    private_key: "{{ .Env.AUR_KEY }}"
+    git_url: "ssh://aur@aur.archlinux.org/ani-bin.git"
+
+release:
+  github:
+    owner: WhymeUMR
+    name: ani
+  draft: false
+  prerelease: auto
