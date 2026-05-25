@@ -14,6 +14,7 @@ import (
 	"github.com/WhymeUMR/ani/internal/anilibria"
 	"github.com/WhymeUMR/ani/internal/jikan"
 	"github.com/WhymeUMR/ani/internal/nyaa"
+	"github.com/WhymeUMR/ani/internal/rutor"
 	"github.com/WhymeUMR/ani/internal/torrent"
 )
 
@@ -84,7 +85,7 @@ func showHelp() {
 	fmt.Println("  ani                    Show popular anime")
 	fmt.Println("  ani top                Show popular anime")
 	fmt.Println("  ani search <query>     Search for anime by name")
-	fmt.Println("  ani play <query>       Search and play torrent (AniLibria / Nyaa.si)")
+	fmt.Println("  ani play <query>       Search and play torrent (AniLibria / Nyaa.si / Rutor)")
 	fmt.Println("  ani <query>            Quick search for anime")
 }
 
@@ -114,16 +115,23 @@ func playTorrentFlow(ctx context.Context, query string) error {
 	fmt.Printf("\n%sSelect Torrent Source:%s\n", colorYellow, colorReset)
 	fmt.Println("  [1] AniLibria (Russian voiceover / Русская озвучка)")
 	fmt.Println("  [2] Nyaa.si (Original audio with subs / Оригинал + субтитры)")
+	fmt.Println("  [3] Rutor (Diverse RU Voiceovers: Studio Band, JAM, AniDUB, steponee, etc.)")
 
-	sourceChoice, err := readChoice("\nEnter source number: ", 2)
+	sourceChoice, err := readChoice("\nEnter source number: ", 3)
 	if err != nil {
 		return err
 	}
 
-	if sourceChoice == 1 {
+	switch sourceChoice {
+	case 1:
 		return playAniLibria(ctx, query)
+	case 2:
+		return playNyaa(ctx, query)
+	case 3:
+		return playRutor(ctx, query)
+	default:
+		return fmt.Errorf("invalid source choice")
 	}
-	return playNyaa(ctx, query)
 }
 
 func playAniLibria(ctx context.Context, query string) error {
@@ -245,6 +253,49 @@ func playNyaa(ctx context.Context, query string) error {
 
 	selectedTorrent := torrents[choice-1]
 	return streamMagnet(selectedTorrent.Magnet(), selectedTorrent.Title)
+}
+
+func playRutor(ctx context.Context, query string) error {
+	rutorClient := rutor.NewClient(15 * time.Second)
+	fmt.Printf("\n%sSearching torrents on Rutor for %s%q%s...\n\n", colorCyan, colorYellow, query, colorCyan)
+
+	torrents, err := rutorClient.Search(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to search Rutor: %w", err)
+	}
+
+	if len(torrents) == 0 {
+		fmt.Printf("%sNo torrents found on Rutor for %q%s\n", colorYellow, query, colorReset)
+		return nil
+	}
+
+	// Display torrents
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintf(w, "%s#\tSIZE\tSEEDERS\tTITLE (VOICEOVER)%s\n", colorCyan, colorReset)
+	limit := 15
+	if len(torrents) < limit {
+		limit = len(torrents)
+	}
+
+	for i := 0; i < limit; i++ {
+		t := torrents[i]
+		fmt.Fprintf(w, "%s[%d]\t%s%s\t%s%d\t%s%s%s\n",
+			colorCyan, i+1,
+			colorReset, t.Size,
+			colorGreen, t.Seeders,
+			colorYellow, truncate(t.Title, 75),
+			colorReset,
+		)
+	}
+	w.Flush()
+
+	choice, err := readChoice("\nSelect torrent number to play: ", limit)
+	if err != nil {
+		return err
+	}
+
+	selectedTorrent := torrents[choice-1]
+	return streamMagnet(selectedTorrent.Magnet, selectedTorrent.Title)
 }
 
 func streamMagnet(magnet string, title string) error {
