@@ -1,8 +1,12 @@
 package app
 
 import (
+	"context"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/WhymeUMR/ani/internal/anilibria"
 	"github.com/WhymeUMR/ani/internal/torrent"
 )
 
@@ -140,5 +144,67 @@ func TestFindEpisodeFile(t *testing.T) {
 	idx = findEpisodeFile(files, 3)
 	if idx != -1 {
 		t.Errorf("findEpisodeFile(..., 3) = %d; want -1", idx)
+	}
+}
+
+func TestSelectBestTorrent(t *testing.T) {
+	// 1. Выбор 1080p над 720p при равных сидерах
+	torrents1 := []PlayableTorrent{
+		{Title: "Chainsaw Man [05] 720p", Seeders: 10},
+		{Title: "Chainsaw Man [05] 1080p", Seeders: 10},
+	}
+	best := selectBestTorrent(torrents1)
+	if best.Title != "Chainsaw Man [05] 1080p" {
+		t.Errorf("expected 1080p to be selected, got %q", best.Title)
+	}
+
+	// 2. Выбор 720p, если у 1080p 0 сидеров
+	torrents2 := []PlayableTorrent{
+		{Title: "Chainsaw Man [05] 720p", Seeders: 10},
+		{Title: "Chainsaw Man [05] 1080p", Seeders: 0},
+	}
+	best = selectBestTorrent(torrents2)
+	if best.Title != "Chainsaw Man [05] 720p" {
+		t.Errorf("expected 720p to be selected due to 0 seeds on 1080p, got %q", best.Title)
+	}
+
+	// 3. Выбор раздачи с большим количеством сидеров в одной категории качества
+	torrents3 := []PlayableTorrent{
+		{Title: "Chainsaw Man [05] 1080p (R1)", Seeders: 5},
+		{Title: "Chainsaw Man [05] 1080p (R2)", Seeders: 25},
+	}
+	best = selectBestTorrent(torrents3)
+	if best.Title != "Chainsaw Man [05] 1080p (R2)" {
+		t.Errorf("expected R2 with 25 seeds to be selected, got %q", best.Title)
+	}
+
+	// 4. Корректная обработка пустого списка
+	best = selectBestTorrent(nil)
+	if best.Title != "" {
+		t.Errorf("expected empty torrent for nil list, got %q", best.Title)
+	}
+}
+
+func TestRussianTitleResolution(t *testing.T) {
+	// Интеграционный тест: проверяем, что русский запрос транслируется в латиницу через AniLibria
+	alClient := anilibria.NewClient(10 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	releases, err := alClient.Search(ctx, "Класс превосходства")
+	if err != nil {
+		t.Skipf("Skipping integration test due to network/API error: %v", err)
+	}
+
+	if len(releases) == 0 {
+		t.Fatalf("expected to resolve Russian title to at least one release on AniLibria")
+	}
+
+	resolvedTitle := releases[0].Name.English
+	expectedSubstring := "Youkoso Jitsuryoku"
+	
+	if !strings.Contains(resolvedTitle, expectedSubstring) && !strings.Contains(releases[0].Name.Main, "превосходства") {
+		t.Errorf("expected resolved English title to contain %q or Russian name to contain 'превосходства', got resolved: %q, main: %q",
+			expectedSubstring, resolvedTitle, releases[0].Name.Main)
 	}
 }

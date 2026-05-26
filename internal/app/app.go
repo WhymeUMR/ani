@@ -123,6 +123,27 @@ func playTorrentFlow(ctx context.Context, query string) error {
 	}
 
 	if len(animeList) == 0 {
+		// Автоматический мост для русскоязычных запросов:
+		// Если Jikan (MAL) ничего не нашел, пробуем разрешить русское название через AniLibria
+		fmt.Printf("%sNo results on MyAnimeList. Trying to resolve Russian title via AniLibria...%s\n", colorGray, colorReset)
+		alClient := anilibria.NewClient(10 * time.Second)
+		releases, err := alClient.Search(ctx, query)
+		if err == nil && len(releases) > 0 {
+			// Нашли соответствующее английское название
+			resolvedTitle := releases[0].Name.English
+			if resolvedTitle != "" {
+				fmt.Printf("%sResolved title: %s%q%s. Searching on MyAnimeList...%s\n\n",
+					colorGray, colorYellow, resolvedTitle, colorGray, colorReset)
+				
+				animeList, err = jClient.SearchAnime(ctx, resolvedTitle)
+				if err != nil {
+					return fmt.Errorf("failed to search Jikan with resolved title: %w", err)
+				}
+			}
+		}
+	}
+
+	if len(animeList) == 0 {
 		fmt.Printf("%sNo anime found for %q.%s\n", colorYellow, query, colorReset)
 		return nil
 	}
@@ -233,33 +254,10 @@ func playTorrentFlow(ctx context.Context, query string) error {
 	}
 	selectedVO := available[voChoice-1]
 
-	// 5. Выбор конкретной раздачи (если их несколько для выбранной озвучки)
-	var selectedTorrent PlayableTorrent
-	if len(selectedVO.Items) == 1 {
-		selectedTorrent = selectedVO.Items[0]
-		fmt.Printf("\n%sAutomatically selected torrent: %s (%s, %d seeds)%s\n",
-			colorGreen, selectedTorrent.Title, selectedTorrent.Size, selectedTorrent.Seeders, colorReset)
-	} else {
-		fmt.Printf("\n%sAvailable torrents for %s:%s\n", colorYellow, selectedVO.Name, colorReset)
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintf(w, "%s#\tSIZE\tSEEDERS\tTITLE%s\n", colorCyan, colorReset)
-		for i, t := range selectedVO.Items {
-			fmt.Fprintf(w, "%s[%d]\t%s%s\t%s%d\t%s%s%s\n",
-				colorCyan, i+1,
-				colorReset, t.Size,
-				colorGreen, t.Seeders,
-				colorYellow, truncate(t.Title, 80),
-				colorReset,
-			)
-		}
-		w.Flush()
-
-		tChoice, err := readChoice("\nSelect torrent version: ", len(selectedVO.Items))
-		if err != nil {
-			return err
-		}
-		selectedTorrent = selectedVO.Items[tChoice-1]
-	}
+	// 5. Автоматически выбираем лучшую раздачу под капотом
+	selectedTorrent := selectBestTorrent(selectedVO.Items)
+	fmt.Printf("\n%sAutomatically selected best torrent: %s (%s, %d seeds)%s\n",
+		colorGreen, truncate(selectedTorrent.Title, 70), selectedTorrent.Size, selectedTorrent.Seeders, colorReset)
 
 	// 6. Запускаем стриминг и автоматический выбор файла серии
 	return streamMagnetFlow(selectedTorrent.Magnet, selectedTorrent.Title, epNum)
@@ -272,6 +270,62 @@ type PlayableTorrent struct {
 	Seeders   int
 	Magnet    string
 	Voiceover string
+}
+
+// selectBestTorrent автоматически выбирает лучшую раздачу на основе весов качества и количества сидеров
+func selectBestTorrent(torrents []PlayableTorrent) PlayableTorrent {
+	if len(torrents) == 0 {
+		return PlayableTorrent{}
+	}
+	if len(torrents) == 1 {
+		return torrents[0]
+	}
+
+	getQualityWeight := func(title string) int {
+		title = strings.ToLower(title)
+		if strings.Contains(title, "1080") || strings.Contains(title, "fhd") {
+			return 3 // FullHD
+		}
+		if strings.Contains(title, "720") || strings.Contains(title, "hd") {
+			return 2 // HD
+		}
+		if strings.Contains(title, "480") || strings.Contains(title, "sd") {
+			return 1 // SD
+		}
+		return 2 // По умолчанию среднее качество
+	}
+
+	bestIdx := 0
+	bestScore := -100.0
+
+	for i, t := range torrents {
+		qWeight := getQualityWeight(t.Title)
+
+		seeds := t.Seeders
+		if seeds < 0 {
+			seeds = 0
+		}
+
+		seedScore := float64(seeds)
+		// Насыщение сидеров после 30 (для плавного стриминга 30 сидеров вполне достаточно)
+		if seedScore > 30 {
+			seedScore = 30 + (seedScore-30)*0.1
+		}
+
+		// Сильный штраф для раздач без сидеров
+		if seeds == 0 {
+			seedScore = -50.0
+		}
+
+		score := float64(qWeight)*20.0 + seedScore
+
+		if score > bestScore {
+			bestScore = score
+			bestIdx = i
+		}
+	}
+
+	return torrents[bestIdx]
 }
 
 var (
