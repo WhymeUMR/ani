@@ -66,8 +66,14 @@ func (s *Streamer) LoadMagnet(magnet string) ([]TorrentFile, error) {
 		return nil, fmt.Errorf("failed to add magnet link: %w", err)
 	}
 
-	// Wait for torrent metadata
-	<-tor.GotInfo()
+	// Wait for torrent metadata with a timeout to prevent hanging on dead torrents
+	select {
+	case <-tor.GotInfo():
+		// Metadata received successfully
+	case <-time.After(20 * time.Second):
+		tor.Drop()
+		return nil, fmt.Errorf("timeout fetching torrent metadata (no active seeders or slow connection)")
+	}
 	s.tor = tor
 
 	var files []TorrentFile
